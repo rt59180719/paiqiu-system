@@ -1,0 +1,24 @@
+name: LINE Daily Notification
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 每天 00:00 UTC = 台北時間 08:00
+  workflow_dispatch:        # 允許手動觸發測試
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install firebase
+        run: npm install firebase
+
+      - name: Send LINE notification
+        env:
+          LINE_CHANNEL_TOKEN: ${{ secrets.LINE_CHANNEL_TOKEN }}
+        run: node notify.mjs
