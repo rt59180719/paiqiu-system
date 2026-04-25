@@ -126,7 +126,10 @@ export default function App() {
   });
 
   // --- UI State ---
-  const [currentMonth, setCurrentMonth] = useState(1);
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const tw = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    return tw.getUTCMonth() + 1;
+  });
   const [loading, setLoading] = useState(true);
 
   // --- Auth Effect ---
