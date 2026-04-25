@@ -31,7 +31,8 @@ function getTaiwanDateStr(offsetDays = 0) {
 }
 
 function getDow(dateStr) {
-  return new Date(dateStr + 'T00:00:00+08:00').getDay();
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
 }
 
 function isOff(dateStr, holidays) {
