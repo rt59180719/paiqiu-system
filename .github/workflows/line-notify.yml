@@ -1,9 +1,7 @@
 name: LINE Daily Notification
 
 on:
-  schedule:
-    - cron: '0 0 * * *'   # 每天 00:00 UTC = 台北時間 08:00
-  workflow_dispatch:        # 允許手動觸發測試
+  workflow_dispatch:        # 由 cron-job.org 每天台北時間 08:00 觸發
 
 jobs:
   notify:
