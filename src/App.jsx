@@ -77,6 +77,16 @@ const COLORS = [
   "#D8B4FE",
   "#F9A8D4",
 ];
+// 排休時段：全天 / 上午(8:30~12:00 共3.5hr) / 下午(13:00~17:30 共4.5hr)，半天皆扣 0.5 天額度
+const PERIOD_LABEL = { am: "上午", pm: "下午" };
+const PERIOD_HOURS = { am: 3.5, pm: 4.5 };
+// 舊資料沒有 period 欄位，一律視為全天
+const getPeriod = (r) => (r.period === "am" || r.period === "pm" ? r.period : "full");
+const periodsOverlap = (a, b) => a === "full" || b === "full" || a === b;
+const paiXiuLabel = (r) =>
+  getPeriod(r) === "full" ? "排休" : `排休-${PERIOD_LABEL[getPeriod(r)]}`;
+// 12/1 起：取消週六每月 1 次限制，排休只能排週二到週五
+const NEW_PAIXIU_RULE_START = "2026-12-01";
 // 設定假別顯示的強制順序
 const LEAVE_ORDER = [
   "排休",
@@ -644,7 +654,7 @@ function Calendar({
 
                       // Desktop format: 王小明(特休-4h) or 王小明(排休)
                       const displayStrDesktop = isPaiXiu
-                        ? `${getStaffName(rec.staffId)}(排休)`
+                        ? `${getStaffName(rec.staffId)}(${paiXiuLabel(rec)})`
                         : `${getStaffName(rec.staffId)}(${typeName}-${
                             rec.amount
                           }${unit === "hour" ? "h" : "d"})`;
@@ -652,7 +662,7 @@ function Calendar({
                       // Mobile format: 暱稱(假別) e.g., 小明(特休)
                       const displayStrMobile = `${getStaffNick(
                         rec.staffId
-                      )}(${typeName})`;
+                      )}(${isPaiXiu ? paiXiuLabel(rec) : typeName})`;
 
                       return (
                         <div
@@ -692,6 +702,8 @@ function Calendar({
               在 <br />
               <span className="text-xl font-bold block mt-2 px-3 py-2 bg-slate-100 rounded text-center">
                 {cancelTarget.date}
+                {getPeriod(cancelTarget) !== "full" &&
+                  ` ${PERIOD_LABEL[getPeriod(cancelTarget)]}`}
               </span>{" "}
               的休假嗎？
             </p>
@@ -757,6 +769,7 @@ function ApplicationForm({
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [hoursPerDay, setHoursPerDay] = useState(8);
+  const [period, setPeriod] = useState("full");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [conflictError, setConflictError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
@@ -816,7 +829,12 @@ function ApplicationForm({
       const staff = staffList.find((s) => s.id === staffId);
       const selType = leaveTypes.find((t) => t.id === typeId);
       const isPaiXiu = selType.name === "排休";
-      const dailyAmount = isPaiXiu ? 1 : Number(hoursPerDay);
+      const reqPeriod = isPaiXiu ? period : "full";
+      const dailyAmount = isPaiXiu
+        ? reqPeriod === "full"
+          ? 1
+          : 0.5
+        : Number(hoursPerDay);
 
       let current = new Date(startDate);
       const end = new Date(endDate);
@@ -865,11 +883,33 @@ function ApplicationForm({
           if (staff.resignationDate && dStr >= staff.resignationDate)
             throw new Error(`日期 ${dStr} 已超過或等於您的離職日`);
 
+          // 同一天：排休上午＋排休下午可並存，其他情況不可重複
           const exist = records.find(
             (r) =>
-              r.staffId === staffId && r.date === dStr && r.status === "normal"
+              r.staffId === staffId &&
+              r.date === dStr &&
+              r.status === "normal" &&
+              !(
+                isPaiXiu &&
+                leaveTypes.find((t) => t.id === r.typeId)?.name === "排休" &&
+                !periodsOverlap(getPeriod(r), reqPeriod)
+              )
           );
           if (exist) throw new Error(`日期 ${dStr} 您已經有排過假了`);
+
+          const dayStr = dStr.split("-")[2];
+          const dateLabel = `${month}月${parseInt(dayStr, 10)}日`;
+          const isNewRule = dStr >= NEW_PAIXIU_RULE_START;
+
+          if (isPaiXiu && isNewRule) {
+            const dow = getDayOfWeek(dStr);
+            if (dow === 1 || dow === 6)
+              throw new Error(
+                `${dateLabel}是星期${
+                  dow === 1 ? "一" : "六"
+                }，12月起排休只能安排星期二到星期五`
+              );
+          }
 
           if (staff.agentId) {
             const agentLeave = records.find(
@@ -894,28 +934,52 @@ function ApplicationForm({
                   r.date === dStr &&
                   r.status === "normal" &&
                   groupMates.includes(r.staffId) &&
-                  leaveTypes.find((t) => t.id === r.typeId)?.name === "排休"
+                  leaveTypes.find((t) => t.id === r.typeId)?.name === "排休" &&
+                  periodsOverlap(getPeriod(r), reqPeriod)
               );
               if (groupLeaves.length > 0)
                 throw new Error(`日期 ${dStr} 同組已有其他人排休`);
             }
 
+            // 每週最多排休 1 天：可拆成一個上午＋一個下午，同時段不可重複
             const weekNum = getWeekNumber(dStr);
-            const existingInWeek = records.filter((r) => {
-              if (r.staffId !== staffId || r.status !== "normal") return false;
-              const rTypeName = leaveTypes.find((t) => t.id === r.typeId)?.name;
-              if (rTypeName !== "排休") return false;
-              return getWeekNumber(r.date) === weekNum;
-            });
-            const batchInWeek = datesToApply.filter(
-              (d) => getWeekNumber(d) === weekNum && d < dStr
+            const weekPaiXiu = [
+              ...records
+                .filter((r) => {
+                  if (r.staffId !== staffId || r.status !== "normal")
+                    return false;
+                  const rTypeName = leaveTypes.find(
+                    (t) => t.id === r.typeId
+                  )?.name;
+                  if (rTypeName !== "排休") return false;
+                  return getWeekNumber(r.date) === weekNum;
+                })
+                .map((r) => ({ date: r.date, period: getPeriod(r) })),
+              ...datesToApply
+                .filter((d) => getWeekNumber(d) === weekNum && d < dStr)
+                .map((d) => ({ date: d, period: reqPeriod })),
+            ];
+            const weekConflict = weekPaiXiu.find((w) =>
+              periodsOverlap(w.period, reqPeriod)
             );
-            if (existingInWeek.length + batchInWeek.length >= 1) {
-              throw new Error(`日期 ${dStr} 違反每週限排休 1 天之規則`);
+            if (weekConflict) {
+              const [, wm, wd] = weekConflict.date.split("-");
+              const wLabel = `${parseInt(wm, 10)}月${parseInt(wd, 10)}日`;
+              if (weekConflict.period === reqPeriod && reqPeriod !== "full") {
+                const pLabel = PERIOD_LABEL[reqPeriod];
+                throw new Error(
+                  `${wLabel}已安排${pLabel}排休(${PERIOD_HOURS[reqPeriod]}小時)，本週無法再安排${pLabel}排休`
+                );
+              }
+              throw new Error(
+                `日期 ${dStr} 違反每週限排休 1 天之規則（本週 ${wLabel} 已${paiXiuLabel(
+                  weekConflict
+                )}）`
+              );
             }
 
             const isSat = getDayOfWeek(dStr) === 6;
-            if (isSat) {
+            if (isSat && !isNewRule) {
               const satExisting = records.filter((r) => {
                 if (r.staffId !== staffId || r.status !== "normal")
                   return false;
@@ -951,15 +1015,21 @@ function ApplicationForm({
           date: dStr,
           typeId,
           amount: dailyAmount,
+          ...(reqPeriod !== "full" && { period: reqPeriod }),
           status: "normal",
           createdAt: new Date().toISOString(),
         });
       }
 
-      setSuccessMsg(`成功申請了 ${datesToApply.length} 天假！`);
+      setSuccessMsg(
+        reqPeriod === "full"
+          ? `成功申請了 ${datesToApply.length} 天假！`
+          : `成功申請了 ${datesToApply.length} 個${PERIOD_LABEL[reqPeriod]}排休！`
+      );
       setStartDate("");
       setEndDate("");
       setTypeId("");
+      setPeriod("full");
     } catch (err) {
       setConflictError(err.message);
     } finally {
@@ -1046,6 +1116,37 @@ function ApplicationForm({
             <p className="text-xs text-red-500 mt-1">目前無可用額度之假別</p>
           )}
         </div>
+
+        {selTypeObj && selTypeObj.name === "排休" && (
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              排休時段
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                ["full", "全天"],
+                ["am", "排休-上午"],
+                ["pm", "排休-下午"],
+              ].map(([val, label]) => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setPeriod(val)}
+                  className={`py-2 rounded border text-sm font-bold transition-colors ${
+                    period === val
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              每週最多排休 1 天，可拆成一個上午＋一個下午；12月起僅限星期二至星期五
+            </p>
+          </div>
+        )}
 
         {selTypeObj && selTypeObj.name !== "排休" && (
           <div>
@@ -2152,6 +2253,8 @@ function AdminRecords({ records, staffList, leaveTypes, appId, db }) {
                   <td className="p-4">
                     <span className="bg-blue-50 text-blue-700 font-bold px-2 py-0.5 rounded">
                       {r.amount} {t?.unit === "hour" ? "h" : "d"}
+                      {getPeriod(r) !== "full" &&
+                        `（${PERIOD_LABEL[getPeriod(r)]}）`}
                     </span>
                   </td>
                   <td className="p-4">

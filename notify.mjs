@@ -202,7 +202,10 @@ function buildMessage(system, todayStr, tomorrowStr, todayRecs, tomorrowRecs, st
     const name = staffMap[r.staffId]?.name || '未知';
     const type = typeMap[r.typeId]?.name   || '未知';
     const unit = typeMap[r.typeId]?.unit   || 'day';
-    if (type === '排休') return `• ${name}（排休）`;
+    if (type === '排休') {
+      const half = { am: '-上午', pm: '-下午' }[r.period] || '';
+      return `• ${name}（排休${half}）`;
+    }
     return `• ${name}（${type}-${r.amount}${unit === 'hour' ? 'h' : '天'}）`;
   }).join('\n');
 
@@ -212,7 +215,7 @@ function buildMessage(system, todayStr, tomorrowStr, todayRecs, tomorrowRecs, st
   if (todayRecs.length === 0) {
     msg += `🏖 今日休假：無\n`;
   } else {
-    msg += `🏖 今日休假（${todayRecs.length}人）\n${fmt(todayRecs)}\n`;
+    msg += `🏖 今日休假（${new Set(todayRecs.map(r => r.staffId)).size}人）\n${fmt(todayRecs)}\n`;
   }
 
   if (!isOff(tomorrowStr, holidayDates)) {
@@ -237,6 +240,11 @@ async function pushLine(groupId, text) {
 
 // ── 主程式 ────────────────────────────────────────────────────────────────
 async function main() {
+  if (!LINE_TOKEN) {
+    console.error('❌ LINE_CHANNEL_TOKEN 未設定，請確認 GitHub Secret');
+    process.exit(1);
+  }
+
   const app = initializeApp(FIREBASE_CONFIG);
   const db  = getFirestore(app);
   await signInAnonymously(getAuth(app));
@@ -244,6 +252,8 @@ async function main() {
   const today    = getTaiwanDateStr(0);
   const tomorrow = getTaiwanDateStr(1);
   console.log(`台北時間 今天：${today} 明天：${tomorrow}`);
+
+  let hasError = false;
 
   for (const sys of SYSTEMS) {
     try {
@@ -253,6 +263,8 @@ async function main() {
         fetchAll(db, sys.appId, 'holidays'),
         fetchAll(db, sys.appId, 'records'),
       ]);
+
+      console.log(`[${sys.name}] 資料讀取完成：staff=${staff.length} holidays=${holidays.length} records=${records.length}`);
 
       const holidayDates = holidays.map(h => h.date);
       const todayHoliday = holidays.find(h => h.date === today);
@@ -295,11 +307,12 @@ async function main() {
       await pushLine(sys.groupId, msg);
       console.log(`[${sys.name}] ✓ 發送成功`);
     } catch (e) {
-      console.error(`[${sys.name}] ❌ ${e.message}`);
+      console.error(`[${sys.name}] ❌ 錯誤：${e.message}`);
+      hasError = true;
     }
   }
 
-  process.exit(0);
+  process.exit(hasError ? 1 : 0);
 }
 
 main().catch(e => { console.error('Fatal:', e.message); process.exit(1); });
