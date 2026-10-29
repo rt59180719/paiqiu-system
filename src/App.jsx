@@ -87,6 +87,8 @@ const paiXiuLabel = (r) =>
   getPeriod(r) === "full" ? "排休" : `排休-${PERIOD_LABEL[getPeriod(r)]}`;
 // 12/1 起：取消週六每月 1 次限制，排休只能排週二到週五
 const NEW_PAIXIU_RULE_START = "2026-12-01";
+// 2027/1/1 起提示文字不再顯示「12月起」
+const RULE_PREFIX = new Date() < new Date(2027, 0, 1) ? "12月起" : "";
 // 設定假別顯示的強制順序
 const LEAVE_ORDER = [
   "排休",
@@ -907,7 +909,7 @@ function ApplicationForm({
               throw new Error(
                 `${dateLabel}是星期${
                   dow === 1 ? "一" : "六"
-                }，12月起排休只能安排星期二到星期五`
+                }，${RULE_PREFIX}排休只能安排星期二到星期五`
               );
           }
 
@@ -1143,7 +1145,7 @@ function ApplicationForm({
               ))}
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              每週最多排休 1 天，可拆成一個上午＋一個下午；12月起僅限星期二至星期五
+              每週最多排休 1 天，可拆成一個上午＋一個下午；{RULE_PREFIX}排休僅限安排星期二至星期五
             </p>
           </div>
         )}
